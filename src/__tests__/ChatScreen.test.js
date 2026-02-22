@@ -102,7 +102,8 @@ describe('ChatScreen', () => {
                 'How do I write better?',
                 7,
                 'Scout',
-                'loyal, encouraging, and energetic'
+                'loyal, encouraging, and energetic',
+                []
             );
         });
     });

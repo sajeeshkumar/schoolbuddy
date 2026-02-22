@@ -143,6 +143,42 @@ const ChatScreen = ({ navigation }) => {
         scrollToBottom();
     }, [scrollToBottom]);
 
+    // Build Gemini-compatible chat history from messages state.
+    // Includes image analysis feedback as text summaries so the AI remembers prior writing reviews.
+    // Caps at last 40 messages (~20 exchanges) to stay within token limits.
+    const buildChatHistory = (currentMessages) => {
+        const validMessages = currentMessages.filter(
+            (m) => m.text && !m.isError && m.id !== 'welcome'
+        );
+        // Keep last 40 messages (up to 20 user + 20 bot = 20 exchanges)
+        const recent = validMessages.slice(-40);
+        return recent.map((m) => {
+            // For bot messages with image feedback, include a text summary of the analysis
+            if (m.feedback && m.type === 'bot') {
+                const fb = m.feedback;
+                const criteriaText = (fb.criteria || [])
+                    .map((c) => `${c.name}: ${c.stars}⭐ - ${c.feedback}`)
+                    .join('\n');
+                const summaryText = `[Writing Analysis]\n${fb.overallEncouragement}\nOverall: ${fb.overallStars}⭐\n${criteriaText}${fb.nextChallenge ? `\nNext challenge: ${fb.nextChallenge}` : ''}`;
+                return {
+                    role: 'model',
+                    parts: [{ text: summaryText }],
+                };
+            }
+            // For user image messages, note that they submitted a photo
+            if (m.imageUri && m.type === 'user') {
+                return {
+                    role: 'user',
+                    parts: [{ text: '[Student submitted a photo of their writing for analysis]' }],
+                };
+            }
+            return {
+                role: m.type === 'user' ? 'user' : 'model',
+                parts: [{ text: m.text }],
+            };
+        });
+    };
+
     const handleSendText = async () => {
         const text = inputText.trim();
         if (!text || isLoading) return;
@@ -158,7 +194,9 @@ const ChatScreen = ({ navigation }) => {
         setIsLoading(true);
 
         try {
-            const response = await sendTextMessage(apiKey, text, grade, pet.name, pet.personality);
+            // Build history from all messages so far (before this new user message)
+            const chatHistory = buildChatHistory(messages);
+            const response = await sendTextMessage(apiKey, text, grade, pet.name, pet.personality, chatHistory);
             const botMsg = {
                 id: (Date.now() + 1).toString(),
                 type: 'bot',
@@ -225,22 +263,32 @@ const ChatScreen = ({ navigation }) => {
         }
     };
 
+    const performReset = async () => {
+        await clearAllData();
+        setMessages([]);
+        navigation.replace('Welcome');
+    };
+
     const handleReset = () => {
-        Alert.alert(
-            'Start Over?',
-            'This will clear your chat history and settings. You\'ll need to set up again.',
-            [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                    text: 'Reset',
-                    style: 'destructive',
-                    onPress: async () => {
-                        await clearAllData();
-                        navigation.replace('Welcome');
+        if (Platform.OS === 'web') {
+            // Alert.alert doesn't work on web — use confirm dialog
+            if (window.confirm('Start Over?\n\nThis will clear your chat history and settings. You\'ll need to set up again.')) {
+                performReset();
+            }
+        } else {
+            Alert.alert(
+                'Start Over?',
+                'This will clear your chat history and settings. You\'ll need to set up again.',
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                        text: 'Reset',
+                        style: 'destructive',
+                        onPress: performReset,
                     },
-                },
-            ]
-        );
+                ]
+            );
+        }
     };
 
     const renderMessage = ({ item }) => {
@@ -340,6 +388,14 @@ const ChatScreen = ({ navigation }) => {
                         editable={!isLoading}
                         onSubmitEditing={handleSendText}
                         returnKeyType="send"
+                        onKeyPress={(e) => {
+                            // On web, multiline TextInput ignores onSubmitEditing.
+                            // Intercept Enter (without Shift) to send the message.
+                            if (Platform.OS === 'web' && e.nativeEvent.key === 'Enter' && !e.nativeEvent.shiftKey) {
+                                e.preventDefault();
+                                handleSendText();
+                            }
+                        }}
                     />
                     <TouchableOpacity
                         style={[

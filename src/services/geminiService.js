@@ -103,15 +103,17 @@ export const parseGeminiFeedback = (text) => {
 
 /**
  * Send a text-only message to the pet buddy (no image).
+ * Uses Gemini's multi-turn chat API to maintain conversation context.
  *
  * @param {string} apiKey - Google Gemini API key
  * @param {string} message - User's text message
  * @param {number} grade - Grade level
  * @param {string} petName - Pet's name
  * @param {string} petPersonality - Pet's personality description
+ * @param {Array} chatHistory - Previous conversation turns as {role, parts} objects
  * @returns {string} Bot's text response
  */
-export const sendTextMessage = async (apiKey, message, grade = 6, petName = 'your buddy', petPersonality = 'warm, encouraging') => {
+export const sendTextMessage = async (apiKey, message, grade = 6, petName = 'your buddy', petPersonality = 'warm, encouraging', chatHistory = []) => {
     if (!apiKey) {
         throw new Error('API key is required.');
     }
@@ -119,16 +121,27 @@ export const sendTextMessage = async (apiKey, message, grade = 6, petName = 'you
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: 'gemma-3-27b-it' });
 
-    const prompt = `You are "${petName}", a ${petPersonality} writing buddy for Grade ${grade} students in Ontario, Canada. 
-  
+    const systemPrompt = `You are "${petName}", a ${petPersonality} writing buddy for Grade ${grade} students in Ontario, Canada.
+
 A student is chatting with you. Respond in a friendly, age-appropriate way. Keep your response concise (2-4 sentences) unless they ask for a detailed explanation.
 
 If they ask about writing, grammar, or English language topics, provide helpful guidance aligned with the Ontario curriculum.
-If they ask unrelated or inappropriate questions, gently redirect them to English writing topics.
+If they ask unrelated or inappropriate questions, gently redirect them to English writing topics.`;
 
-Student's message: ${message}`;
+    // Build history: inject system prompt as the first exchange if no prior history
+    const history = chatHistory.length > 0
+        ? [
+            { role: 'user', parts: [{ text: systemPrompt }] },
+            { role: 'model', parts: [{ text: `Hi there! I'm ${petName}, your writing buddy! How can I help you today? ✏️` }] },
+            ...chatHistory,
+        ]
+        : [
+            { role: 'user', parts: [{ text: systemPrompt }] },
+            { role: 'model', parts: [{ text: `Hi there! I'm ${petName}, your writing buddy! How can I help you today? ✏️` }] },
+        ];
 
-    const result = await model.generateContent(prompt);
+    const chat = model.startChat({ history });
+    const result = await chat.sendMessage(message);
     const response = await result.response;
     return response.text();
 };
